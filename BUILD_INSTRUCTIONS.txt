@@ -1,0 +1,18 @@
+Build instructions (Windows):
+
+1) Install Python 3.11 x64.
+2) Create and activate a virtual environment.
+3) Install dependencies:
+   pip install -r requirements.txt
+   pip install pyinstaller
+4) (Optional) Place FFmpeg binaries in third_party/ffmpeg
+   Example: third_party/ffmpeg/bin/ffmpeg.exe
+5) Build the app (onedir):
+   pyinstaller domina.spec
+6) Install Inno Setup 6.
+7) Build installer:
+   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\domina.iss
+
+Output:
+- App folder: dist\DominaOffline
+- Installer: dist-installer\DominaOffline-Setup.exe
