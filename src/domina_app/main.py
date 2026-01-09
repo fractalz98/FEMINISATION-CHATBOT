@@ -16,6 +16,8 @@ MODEL_NAME = "local-model"
 
 
 STATE_FLOW = ["INTRO", "WARMING", "DEEPENING", "PLATEAU", "AFTERCARE", "COOLDOWN"]
+INTENSITY_ORDER = {"low": 0, "medium": 1, "high": 2}
+EMERGENCY_STOP_WORDS = {"stop", "cancel", "halt", "emergency stop", "quit"}
 
 
 @dataclass
@@ -36,9 +38,11 @@ def build_system_prompt(state: ConversationState) -> str:
         "If uncertain, choose safer phrasing without breaking tone.\n\n"
         "State and consent rules:\n"
         f"- Current phase: {state.phase}.\n"
+        f"- Intensity: {state.intensity}.\n"
         f"- Consent token: {consent}.\n"
         "- Intensity increases only with explicit user consent.\n"
-        "- Emergency stop or cancel overrides everything.\n\n"
+        "- Emergency stop or cancel overrides everything.\n"
+        "- Do not mention numeric levels or internal mechanics.\n\n"
         "Output rules for REAL-TIME TTS:\n"
         "- Emit one short sentence or phrase per line.\n"
         "- Max 8 words per line. Max 60 characters per line.\n"
@@ -202,7 +206,12 @@ class LLMWorker(QtCore.QThread):
             "temperature": 0.7,
         }
         try:
-            with requests.post(API_URL, json=payload, stream=True, timeout=10) as response:
+            with requests.post(
+                API_URL,
+                json=payload,
+                stream=True,
+                timeout=(10, None),
+            ) as response:
                 response.raise_for_status()
                 buffer = ""
                 for line in response.iter_lines(decode_unicode=True):
@@ -293,6 +302,7 @@ class MainWindow(QtWidgets.QWidget):
         self._worker: Optional[LLMWorker] = None
         self._last_speaker: Optional[str] = None
         self._last_streaming = False
+        self._current_response_chunks: List[str] = []
 
         self._tts = TTSWorker()
         self._tts.start()
@@ -317,23 +327,33 @@ class MainWindow(QtWidgets.QWidget):
         text = self.input_box.toPlainText().strip()
         if not text:
             return
+        if text.lower() in EMERGENCY_STOP_WORDS:
+            self._cancel_current()
+            self.input_box.clear()
+            self.append_chat("System", "Emergency stop engaged.")
+            return
         self.append_chat("You", text)
         self.input_box.clear()
         self._cancel_current()
 
-        self._state.intensity = self.intensity_selector.currentText()
-        self._state.voice_profile = self.voice_profile.currentText()
-        if self.consent_button.isChecked():
+        consent_checked = self.consent_button.isChecked()
+        if consent_checked:
             self._state.consent_token = "consent"
             self.consent_button.setChecked(False)
         else:
             self._state.consent_token = None
+        self._state.intensity = self._apply_intensity_policy(
+            self.intensity_selector.currentText(),
+            consent_checked,
+        )
+        self._state.voice_profile = self.voice_profile.currentText()
 
         self._update_phase(text)
         self._messages.append({"role": "user", "content": text})
         messages = [{"role": "system", "content": build_system_prompt(self._state)}]
         messages.extend(self._messages)
 
+        self._current_response_chunks = []
         self._worker = LLMWorker(messages, self._cancel_event)
         self._worker.chunk_ready.connect(self.handle_chunk)
         self._worker.error.connect(self.handle_error)
@@ -344,6 +364,7 @@ class MainWindow(QtWidgets.QWidget):
         if not chunk:
             return
         self.append_chat("Domina", chunk, streaming=True)
+        self._current_response_chunks.append(chunk)
         self._tts.set_intensity(self._state.intensity)
         self._tts.enqueue(chunk)
 
@@ -352,6 +373,11 @@ class MainWindow(QtWidgets.QWidget):
 
     def handle_finished(self) -> None:
         self._last_streaming = False
+        if self._current_response_chunks:
+            response = " ".join(self._current_response_chunks).strip()
+            if response:
+                self._messages.append({"role": "assistant", "content": response})
+        self._current_response_chunks = []
 
     def handle_stop(self) -> None:
         self._cancel_current()
@@ -363,8 +389,19 @@ class MainWindow(QtWidgets.QWidget):
         self._last_streaming = False
 
     def handle_intensity_change(self, value: str) -> None:
-        self._state.intensity = value
-        self._tts.set_intensity(value)
+        self._state.intensity = self._apply_intensity_policy(
+            value,
+            self.consent_button.isChecked(),
+        )
+        self._tts.set_intensity(self._state.intensity)
+
+    def _apply_intensity_policy(self, desired: str, consent: bool) -> str:
+        desired_level = INTENSITY_ORDER.get(desired, 0)
+        current_level = INTENSITY_ORDER.get(self._state.intensity, 0)
+        if not consent and desired_level > current_level:
+            self.intensity_selector.setCurrentText(self._state.intensity)
+            return self._state.intensity
+        return desired
 
     def _update_phase(self, user_text: str) -> None:
         lowered = user_text.lower()
