@@ -1,0 +1,19 @@
+Build Instructions (Windows)
+
+1) Install Python 3.11 (64-bit).
+2) Open PowerShell in the project folder.
+3) Create and activate a virtual environment:
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+4) Install dependencies:
+   pip install -r requirements.txt
+5) Ensure LM Studio is running at http://localhost:1234/v1
+6) Optional: place FFmpeg binaries in third_party\ffmpeg\bin
+7) Build the app with PyInstaller:
+   pyinstaller domina_app.spec
+8) Install Inno Setup (6.x).
+9) Open installer\domina.iss in Inno Setup and build the installer.
+
+Output:
+- dist\Domina\Domina.exe
+- installer\Output\DominaInstaller.exe
